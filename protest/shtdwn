@@ -1,0 +1,118 @@
+import os
+import sys
+import json
+import pyttsx3
+import speech_recognition as sr
+import ollama
+from google import genai
+from dotenv import load_dotenv
+
+load_dotenv()
+
+CONFIG_FILE = "audio_config.json"
+
+class LocalLLMExtension:
+    """Detachable local LLM module."""
+    def __init__(self, model_name="gemma2:9b"):
+        self.model_name = model_name
+        self.is_attached = self._check_connection()
+
+    def _check_connection(self):
+        try:
+            # Pings the local Ollama service
+            ollama.list()
+            return True
+        except Exception:
+            return False
+
+    def generate(self, prompt):
+        if not self.is_attached: return None
+        response = ollama.chat(model=self.model_name, messages=[{'role': 'user', 'content': prompt}])
+        return response['message']['content']
+
+class HybridVoiceAssistant:
+    def __init__(self):
+        self.gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+        self.recognizer = sr.Recognizer()
+        self.tts_engine = pyttsx3.init()
+        self.local_llm = LocalLLMExtension()
+
+        self._setup_audio_devices()
+
+    def _setup_audio_devices(self):
+        """CLI audio configuration setup to prevent background polling."""
+        if not os.path.exists(CONFIG_FILE):
+            print("\n--- Initial Audio Setup ---")
+            for index, name in enumerate(sr.Microphone.list_microphone_names()):
+                print(f"Mic {index}: {name}")
+
+            try:
+                mic_idx = int(input("Enter the ID of your preferred Mic device: "))
+            except ValueError:
+                print("Invalid input. Please run again.")
+                sys.exit(1)
+
+            with open(CONFIG_FILE, "w") as f:
+                json.dump({"mic_id": mic_idx}, f)
+            print("Configuration saved. To reconfigure, delete audio_config.json.")
+
+        with open(CONFIG_FILE, "r") as f:
+            self.mic_id = json.load(f).get("mic_id")
+
+    def speak(self, text):
+        print(f"\n[Assistant]: {text}")
+        self.tts_engine.say(text)
+        self.tts_engine.runAndWait()
+
+    def listen(self):
+        with sr.Microphone(device_index=self.mic_id) as source:
+            print("\n--- Listening ---")
+            # Adjust for ambient noise dynamically
+            self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+            audio = self.recognizer.listen(source)
+
+        try:
+            # Note: Swap recognize_google with a local Whisper implementation for 100% offline STT
+            text = self.recognizer.recognize_google(audio)
+            print(f"[Heard]: {text}")
+            return text
+        except sr.UnknownValueError:
+            return ""
+        except sr.RequestError as e:
+            print(f"[STT Error]: {e}")
+            return ""
+
+    def process_query(self, text):
+        """Routing logic based on query complexity."""
+        complex_triggers = ["complex", "code", "analyze", "script", "advanced"]
+
+        if any(trigger in text.lower() for trigger in complex_triggers):
+            print("\n[Routing to Cloud: Gemini 2.5 Pro]")
+            response = self.gemini_client.models.generate_content(
+                model='gemini-2.5-pro', contents=text
+            )
+            return response.text
+        else:
+            if self.local_llm.is_attached:
+                print("\n[Routing to Local: Gemma 2 9b]")
+                return self.local_llm.generate(text)
+            else:
+                return "The local LLM is currently unplugged. I can only handle basic system commands."
+
+    def run(self):
+        status = "Attached" if self.local_llm.is_attached else "Unplugged"
+        print(f"\nSystem Online. Local LLM Status: {status}")
+
+        while True:
+            user_text = self.listen()
+            if not user_text: continue
+
+            response = self.process_query(user_text)
+            self.speak(response)
+
+if __name__ == "__main__":
+    assistant = HybridVoiceAssistant()
+    try:
+        assistant.run()
+    except KeyboardInterrupt:
+        print("\nShutting down core assistant.")
