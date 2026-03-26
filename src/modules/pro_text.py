@@ -14,9 +14,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Audio Constants - Increased for network stability
+# Audio Constants
 IN_RATE = 16000
-OUT_RATE = 24000
 CHANNELS = 1
 CHUNK = 4096 
 
@@ -102,49 +101,39 @@ def get_system_context(prompt: str) -> str:
 
     return context_data
 
-class LiveToolAssistant:
+class TextOnlyAssistant:
     def __init__(self):
         self.api_key = os.getenv("GEMINI_API_KEY")
         self.api_version = 'v1alpha'
         self.model_id = "gemini-2.5-flash-native-audio-latest"
         self.client = genai.Client(api_key=self.api_key, http_options={'api_version': self.api_version})
 
-        self.mic_queue = queue.Queue(maxsize=20) # Small queue to prevent lag
-        self.speaker_queue = queue.Queue()
+        self.mic_queue = queue.Queue(maxsize=20)
         self.is_running = True
-        self.assistant_speaking = False
         self._load_config()
 
     def _load_config(self):
         config_path = os.path.join(os.path.dirname(__file__), "../../config/audio_config.json")
-        with open(config_path, "r") as f:
-            config = json.load(f)
-            devices = sd.query_devices()
-            self.input_id = next((i for i, d in enumerate(devices) if config["input_pulse_name"].lower() in d['name'].lower() and d['max_input_channels'] > 0), None)
-            self.output_id = next((i for i, d in enumerate(devices) if config["output_pulse_name"].lower() in d['name'].lower() and d['max_output_channels'] > 0), None)
+        try:
+            with open(config_path, "r") as f:
+                config = json.load(f)
+                devices = sd.query_devices()
+                self.input_id = next((i for i, d in enumerate(devices) if config["input_pulse_name"].lower() in d['name'].lower() and d['max_input_channels'] > 0), None)
+        except Exception as e:
+            print(f"Config error: {e}. Using system default input.")
+            self.input_id = None
 
     def audio_callback(self, indata, frames, time_info, status):
-        """Mic -> Queue (Skip if Assistant is talking)"""
-        if not self.is_running or self.assistant_speaking: return
+        """Mic -> Queue"""
+        if not self.is_running: return
         audio_int16 = (indata * 32767).astype(np.int16).tobytes()
         try:
             self.mic_queue.put_nowait(audio_int16)
-        except queue.Full:
-            pass # Drop frames if network is slow to prevent 'glitchy' backlog
-
-    def speaker_worker(self):
-        """Queue -> Speaker (Continuous output)"""
-        # Lower latency output stream
-        with sd.OutputStream(samplerate=OUT_RATE, channels=CHANNELS, dtype='int16', device=self.output_id, blocksize=CHUNK//2) as stream:
-            while self.is_running:
-                try:
-                    data = self.speaker_queue.get(timeout=0.1)
-                    stream.write(data)
-                except queue.Empty: continue
-                except Exception: pass
+        except queue.Full: pass
 
     async def main_loop(self, session):
-        print("System: Conversation link established.")
+        print("\n[System]: Link Established. (Multi-turn Mode)")
+        print("[System]: Assistant audio is discarded; only TEXT is displayed.\n")
 
         async def receiver():
             try:
@@ -152,36 +141,19 @@ class LiveToolAssistant:
                     if not self.is_running: break
 
                     if response.server_content and response.server_content.model_turn:
-                        self.assistant_speaking = True
                         for part in response.server_content.model_turn.parts:
-                            if part.inline_data:
-                                # Queue audio chunks instantly
-                                audio_chunk = np.frombuffer(part.inline_data.data, dtype='int16')
-                                self.speaker_queue.put(audio_chunk)
                             if part.text:
-                                print(f"\n[Brain]: {part.text}")
+                                print(f"{part.text}", end="", flush=True)
 
-                    if response.server_content and (response.server_content.interrupted or response.server_content.turn_complete):
-                        if response.server_content.interrupted:
-                            # Kill current playback immediately
-                            while not self.speaker_queue.empty():
-                                try: self.speaker_queue.get_nowait()
-                                except: break
-                        
-                        # Wait for audio to actually finish playing before re-enabling mic
-                        await asyncio.sleep(0.5) 
-                        self.assistant_speaking = False
-                        
-                        if response.server_content.turn_complete:
-                            print("\n--- Listening ---")
+                    if response.server_content and response.server_content.turn_complete:
+                        print("\n\n--- Listening ---")
 
                     if response.tool_call:
-                        # (Ollama tool logic remains the same)
                         function_responses = []
                         for fc in response.tool_call.function_calls:
                             if fc.name == "query_local_brain":
                                 user_prompt = fc.args.get("prompt")
-                                print(f"\n[Gemini]: Querying Local Brain for: '{user_prompt}'")
+                                print(f"\n[System]: Querying Local Brain for: '{user_prompt}'")
                                 
                                 # 1. Grab the live system state
                                 sys_context = get_system_context(user_prompt)
@@ -192,14 +164,14 @@ class LiveToolAssistant:
                                     f"Here is the live system data from the Linux terminal:\n"
                                     f"{sys_context}\n"
                                     f"Answer the user clearly and concisely based ONLY on this terminal output. "
-                                    f"Do not read out raw UUIDs or exact byte sizes; summarize it naturally for text-to-speech."
+                                    f"Do not read out raw UUIDs or exact byte sizes; summarize it naturally."
                                 )
 
                                 try:
                                     # 3. Send the augmented prompt to Gemma
                                     result = await asyncio.to_thread(
                                         ollama.chat, 
-                                        model='gemma2:9b', 
+                                        model='gemma2:2b', 
                                         messages=[{'role': 'user', 'content': augmented_prompt}]
                                     )
                                     
@@ -227,49 +199,46 @@ class LiveToolAssistant:
                         audio_bytes = await asyncio.to_thread(self.mic_queue.get, timeout=0.1)
                         await session.send_realtime_input(audio=types.Blob(data=audio_bytes, mime_type="audio/pcm;rate=16000"))
                         await asyncio.sleep(0) # Heartbeat yield
-                    except queue.Empty: await asyncio.sleep(0.01)
+                    except queue.Empty:
+                        await asyncio.sleep(0.01)
             except Exception as e:
                 print(f"\n[Sender Error]: {e}")
 
-        # Run both tasks, and finish when the first one dies
+        # Robust Wait logic from pro.py
         done, pending = await asyncio.wait(
             [asyncio.create_task(sender()), asyncio.create_task(receiver())],
             return_when=asyncio.FIRST_COMPLETED
         )
         for task in pending:
             task.cancel()
-        print("System: Conversation teardown.")
+        print("\n[System]: Cycle Resetting...")
 
     async def run(self):
-        threading.Thread(target=self.speaker_worker, daemon=True).start()
-        
         local_brain_tool = types.Tool(function_declarations=[types.FunctionDeclaration(
             name="query_local_brain",
-            description="Use local Gemma 2 9b for system admin and hardware status.",
+            description="Use local Gemma 2 2b for system admin and hardware status.",
             parameters={"type": "OBJECT", "properties": {"prompt": {"type": "STRING"}}, "required": ["prompt"]}
         )])
 
         config = {
-            "system_instruction": "You are a concise voice assistant. Respond via audio.",
+            "system_instruction": "You are a concise assistant. Respond via text and audio.",
             "response_modalities": ["AUDIO"],
             "tools": [local_brain_tool],
             "speech_config": {"voice_config": {"prebuilt_voice_config": {"voice_name": "Aoede"}}}
         }
 
         while self.is_running:
-            print(f"\n🚀 Launching Smooth Link ({self.model_id})...")
             try:
                 async with self.client.aio.live.connect(model=self.model_id, config=config) as session:
-                    print("✅ LINK STABLE.")
                     with sd.InputStream(samplerate=IN_RATE, channels=CHANNELS, callback=self.audio_callback,
                                       blocksize=CHUNK, dtype='float32', device=self.input_id):
                         await self.main_loop(session)
             except Exception as e:
-                print(f"\n[Drop]: {e}")
+                print(f"\n[Connection Drop]: {e}")
                 await asyncio.sleep(2)
 
 if __name__ == "__main__":
-    assistant = LiveToolAssistant()
+    assistant = TextOnlyAssistant()
     try: asyncio.run(assistant.run())
     except KeyboardInterrupt: pass
     finally: assistant.is_running = False
