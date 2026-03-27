@@ -68,9 +68,9 @@ class LiveToolAssistant:
             with sd.OutputStream(samplerate=RATE, channels=CHANNELS, dtype='int16', device=self.device_name, blocksize=CHUNK) as stream:
                 while self.is_running:
                     try:
-                        data_16k = np.frombuffer(self.speaker_queue.get(timeout=0.1), dtype='int16')
-                        # Resample 16k -> 48k
-                        data_48k = np.repeat(data_16k, 3)
+                        data_24k = np.frombuffer(self.speaker_queue.get(timeout=0.1), dtype='int16')
+                        # Resample 24k -> 48k (assuming model sends 24kHz)
+                        data_48k = np.repeat(data_24k, 2)
                         stream.write(data_48k)
                     except queue.Empty: continue
                     except Exception: pass
@@ -122,9 +122,10 @@ class LiveToolAssistant:
         )])
         
         config = {
-            "system_instruction": "You are Gemini Command Pro, a concise voice assistant. Do not introduce yourself unless specifically asked.",
+            "system_instruction": "You are a concise voice assistant. NEVER introduce yourself. DO NOT say 'I am Gemini' or 'Gemini Command Pro'. Start your response immediately with the answer. Be extremely brief.",
             "response_modalities": ["AUDIO"],
-            "tools": [local_brain_tool]
+            "tools": [local_brain_tool],
+            "speech_config": {"voice_config": {"prebuilt_voice_config": {"voice_name": "Aoede"}}}
         }
         
         while self.is_running:
