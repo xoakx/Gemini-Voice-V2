@@ -144,7 +144,7 @@ class LiveToolAssistant:
                 except Exception: pass
 
     async def main_loop(self, session):
-        print("System: Conversation link established.")
+        # print("System: Conversation link established.")
 
         async def receiver():
             try:
@@ -159,7 +159,8 @@ class LiveToolAssistant:
                                 audio_chunk = np.frombuffer(part.inline_data.data, dtype='int16')
                                 self.speaker_queue.put(audio_chunk)
                             if part.text:
-                                print(f"\n[Brain]: {part.text}")
+                                pass # Silenced
+                                # print(f"\n[Brain]: {part.text}")
 
                     if response.server_content and (response.server_content.interrupted or response.server_content.turn_complete):
                         if response.server_content.interrupted:
@@ -173,7 +174,8 @@ class LiveToolAssistant:
                         self.assistant_speaking = False
                         
                         if response.server_content.turn_complete:
-                            print("\n--- Listening ---")
+                            # print("\n--- Listening ---")
+                            pass
 
                     if response.tool_call:
                         # (Ollama tool logic remains the same)
@@ -181,7 +183,7 @@ class LiveToolAssistant:
                         for fc in response.tool_call.function_calls:
                             if fc.name == "query_local_brain":
                                 user_prompt = fc.args.get("prompt")
-                                print(f"\n[Gemini]: Querying Local Brain for: '{user_prompt}'")
+                                # print(f"\n[Gemini]: Querying Local Brain for: '{user_prompt}'")
                                 
                                 # 1. Grab the live system state
                                 sys_context = get_system_context(user_prompt)
@@ -218,7 +220,8 @@ class LiveToolAssistant:
                         await session.send_tool_response(function_responses=function_responses)
 
             except Exception as e:
-                print(f"\n[Receiver Error]: {e}")
+                # print(f"\n[Receiver Error]: {e}")
+                pass
 
         async def sender():
             try:
@@ -229,7 +232,8 @@ class LiveToolAssistant:
                         await asyncio.sleep(0) # Heartbeat yield
                     except queue.Empty: await asyncio.sleep(0.01)
             except Exception as e:
-                print(f"\n[Sender Error]: {e}")
+                # print(f"\n[Sender Error]: {e}")
+                pass
 
         # Run both tasks, and finish when the first one dies
         done, pending = await asyncio.wait(
@@ -238,7 +242,7 @@ class LiveToolAssistant:
         )
         for task in pending:
             task.cancel()
-        print("System: Conversation teardown.")
+        # print("System: Conversation teardown.")
 
     async def run(self):
         threading.Thread(target=self.speaker_worker, daemon=True).start()
@@ -257,15 +261,15 @@ class LiveToolAssistant:
         }
 
         while self.is_running:
-            print(f"\n🚀 Launching Smooth Link ({self.model_id})...")
+            # print(f"\n🚀 Launching Smooth Link ({self.model_id})...")
             try:
                 async with self.client.aio.live.connect(model=self.model_id, config=config) as session:
-                    print("✅ LINK STABLE.")
+                    # print("✅ LINK STABLE.")
                     with sd.InputStream(samplerate=IN_RATE, channels=CHANNELS, callback=self.audio_callback,
                                       blocksize=CHUNK, dtype='float32', device=self.input_id):
                         await self.main_loop(session)
             except Exception as e:
-                print(f"\n[Drop]: {e}")
+                # print(f"\n[Drop]: {e}")
                 await asyncio.sleep(2)
 
 if __name__ == "__main__":
