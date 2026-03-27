@@ -105,7 +105,7 @@ class LiveToolAssistant:
                         f"Answer the user clearly and concisely based ONLY on this terminal output. "
                         f"Do not read out raw UUIDs. Be helpful but brief."
                     )
-                    result = await asyncio.to_thread(ollama.chat, model='gemma2:9b', 
+                    result = await asyncio.to_thread(ollama.chat, model='gemma2:2b', 
                                                    messages=[{'role': 'user', 'content': augmented_prompt}])
                     
                     responses.append(types.FunctionResponse(
@@ -177,7 +177,7 @@ class LiveToolAssistant:
                 "- Services: check failed systemd units and service status.\n"
                 "- Storage: check lsblk layout, RAID status (/proc/mdstat), and mount points.\n\n"
                 "INSTRUCTIONS:\n"
-                "- For any questions about the above, YOU MUST call 'query_local_brain'.\n"
+                "- For any questions about the above, YOU MUST call 'query_local_brain' (powered by Gemma 2 2B).\n"
                 "- Use the tool to provide real-time data from the Linux terminal.\n"
                 "- Be extremely brief. Start your response immediately."
             ),
