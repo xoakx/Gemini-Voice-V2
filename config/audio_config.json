@@ -1,6 +1,6 @@
 {
     "input_pulse_name": "default",
     "output_pulse_name": "default",
-    "input_desc": "System Default",
-    "output_desc": "System Default"
+    "input_desc": "System Default (S9)",
+    "output_desc": "System Default (S9)"
 }
