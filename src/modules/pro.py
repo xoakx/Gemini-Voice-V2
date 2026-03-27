@@ -66,7 +66,7 @@ class LiveToolAssistant:
         self.device_name = 'default'
 
     def audio_callback(self, indata, frames, time_info, status):
-        if not self.is_running or self.assistant_speaking: return
+        if not self.is_running: return
         try:
             # Resample 48k -> 16k
             resampled = indata[::3].flatten()
@@ -134,6 +134,11 @@ class LiveToolAssistant:
                             if part.text:
                                 print(f"\n[Brain]: {part.text}", flush=True)
                     if response.server_content and (response.server_content.interrupted or response.server_content.turn_complete):
+                        if response.server_content.interrupted:
+                            print("\n[System]: Interrupted by user.", flush=True)
+                            while not self.speaker_queue.empty():
+                                try: self.speaker_queue.get_nowait()
+                                except queue.Empty: break
                         self.assistant_speaking = False
                         if response.server_content.turn_complete:
                             print("\n--- Listening ---", flush=True)
