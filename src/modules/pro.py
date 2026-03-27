@@ -52,6 +52,18 @@ def get_system_context(prompt: str) -> str:
         if any(word in prompt_lower for word in ["gpu", "sriov", "intel", "vf"]):
             sriov = subprocess.check_output(["bash", "/home/kms/check_sriov_health.sh"], text=True)
             context_data += f"\n--- SRIOV Health ---\n{sriov}\n"
+        # 5. Project Context / Memory
+        if any(word in prompt_lower for word in ["context", "project", "memory", "history", "log", "summary"]):
+            if os.path.exists("/home/kms/GEMINI.md"):
+                with open("/home/kms/GEMINI.md", "r") as f:
+                    context_data += f"\n--- Project Context (GEMINI.md) ---\n{f.read()}\n"
+            # Latest Work Log
+            log_dir = "/var/www/html2/dokuwiki/data/pages/work_logs/"
+            if os.path.exists(log_dir):
+                logs = sorted([f for f in os.listdir(log_dir) if f.endswith(".txt")])
+                if logs:
+                    with open(os.path.join(log_dir, logs[-1]), "r") as f:
+                        context_data += f"\n--- Latest Work Log ({logs[-1]}) ---\n{f.read()}\n"
     except Exception: pass
     return context_data
 
@@ -175,7 +187,8 @@ class LiveToolAssistant:
                 "- CPU: check load average, uptime, and performance.\n"
                 "- GPU/SRIOV: check Virtual Function (VF) health and 'VF1 FLR' resets.\n"
                 "- Services: check failed systemd units and service status.\n"
-                "- Storage: check lsblk layout, RAID status (/proc/mdstat), and mount points.\n\n"
+                "- Storage: check lsblk layout, RAID status (/proc/mdstat), and mount points.\n"
+                "- Project Context: check project history, work logs, and persistent context from GEMINI.md.\n\n"
                 "INSTRUCTIONS:\n"
                 "- For any questions about the above, YOU MUST call 'query_local_brain' (powered by Gemma 2 2B).\n"
                 "- Use the tool to provide real-time data from the Linux terminal.\n"
