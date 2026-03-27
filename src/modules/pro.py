@@ -89,6 +89,38 @@ class LiveToolAssistant:
         except Exception as e:
             print(f"CRITICAL: Output Hardware Error: {e}", flush=True)
 
+    async def handle_tool_call(self, session, tool_call):
+        responses = []
+        for fc in tool_call.function_calls:
+            if fc.name == "query_local_brain":
+                user_prompt = fc.args.get("prompt")
+                print(f"\n[System]: Querying Local Brain (Gemma 2 9b) for: '{user_prompt}'", flush=True)
+                try:
+                    sys_context = get_system_context(user_prompt)
+                    # Augmented prompt for Gemma
+                    augmented_prompt = (
+                        f"You are a local system administration AI. The user asked: '{user_prompt}'.\n"
+                        f"Here is the live system data from the Linux terminal:\n"
+                        f"{sys_context}\n"
+                        f"Answer the user clearly and concisely based ONLY on this terminal output. "
+                        f"Do not read out raw UUIDs. Be helpful but brief."
+                    )
+                    result = await asyncio.to_thread(ollama.chat, model='gemma2:9b', 
+                                                   messages=[{'role': 'user', 'content': augmented_prompt}])
+                    
+                    responses.append(types.FunctionResponse(
+                        name=fc.name, id=fc.id, response={"result": result['message']['content']}
+                    ))
+                except Exception as e:
+                    print(f"Tool Error: {e}", flush=True)
+                    responses.append(types.FunctionResponse(name=fc.name, id=fc.id, response={"result": f"Local error: {e}"}))
+        
+        if responses:
+            try:
+                await session.send_tool_response(function_responses=responses)
+            except Exception as e:
+                print(f"Error sending tool response: {e}", flush=True)
+
     async def main_loop(self, session):
         async def receiver():
             try:
@@ -106,12 +138,9 @@ class LiveToolAssistant:
                         if response.server_content.turn_complete:
                             print("\n--- Listening ---", flush=True)
                     if response.tool_call:
-                        for fc in response.tool_call.function_calls:
-                            if fc.name == "query_local_brain":
-                                sys_context = get_system_context(fc.args.get("prompt"))
-                                result = await asyncio.to_thread(ollama.chat, model='gemma2:9b', messages=[{'role': 'user', 'content': f"Context:\n{sys_context}\nAnswer concisely."}])
-                                await session.send_tool_response(function_responses=[types.FunctionResponse(name=fc.name, id=fc.id, response={"result": result['message']['content']})])
-            except Exception: pass
+                        asyncio.create_task(self.handle_tool_call(session, response.tool_call))
+            except Exception as e:
+                print(f"Receiver Error: {e}", flush=True)
 
         async def sender():
             try:
@@ -135,9 +164,17 @@ class LiveToolAssistant:
         
         config = {
             "system_instruction": (
-                "You are Gemini Command Pro (v2.1), an expert systems assistant. NEVER introduce yourself. "
-                "For any questions about memory, RAM, CPU, services, RAID, SRIOV, or system status, YOU MUST call the 'query_local_brain' tool. "
-                "Do not say you cannot check the system; use the tool to get the data. Respond concisely via audio."
+                "You are Gemini Command Pro (v2.1), an expert systems assistant for a high-performance SRIOV environment. NEVER introduce yourself.\n\n"
+                "CAPABILITIES:\n"
+                "- Memory/RAM: check current usage, free memory, and swap.\n"
+                "- CPU: check load average, uptime, and performance.\n"
+                "- GPU/SRIOV: check Virtual Function (VF) health and 'VF1 FLR' resets.\n"
+                "- Services: check failed systemd units and service status.\n"
+                "- Storage: check lsblk layout, RAID status (/proc/mdstat), and mount points.\n\n"
+                "INSTRUCTIONS:\n"
+                "- For any questions about the above, YOU MUST call 'query_local_brain'.\n"
+                "- Use the tool to provide real-time data from the Linux terminal.\n"
+                "- Be extremely brief. Start your response immediately."
             ),
             "response_modalities": ["AUDIO"],
             "tools": [local_brain_tool],
